@@ -94,12 +94,27 @@ Example: `/authorize myusername mypassword`
         await login_msg.edit_text(f"❌ Login failed: {error_msg}")
         
         # Provide troubleshooting help
-        help_text = """
-🔧 **Troubleshooting:**
-• Double-check your username and password
-• Make sure your Seedr account is active
-• Try again in a few minutes if server is busy
-• Contact @yourbotusername if problems persist
+        help_text = f"""
+🔧 **Troubleshooting Steps:**
+
+1. **Verify Credentials**: Go to https://www.seedr.cc and make sure you can log in
+2. **Check Account Status**: Ensure your account isn't suspended or requires verification
+3. **Email vs Username**: Try using your email address instead of username
+4. **2FA/Captcha**: Seedr might require additional verification steps
+5. **API Changes**: Seedr may have changed their authentication system
+
+**Debug Command**: Run this to get detailed info:
+```
+python debug_seedr.py
+```
+
+**Common Issues:**
+• Account needs email verification
+• Password contains special characters that need escaping
+• Seedr requires human verification (captcha)
+• API endpoints have changed
+
+**Alternative**: You can manually download files from https://www.seedr.cc and share links here.
         """
         await update.message.reply_text(help_text.strip())
 
