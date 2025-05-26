@@ -11,98 +11,97 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = """
 🌱 **Welcome to Seedr Telegram Bot!**
 
-**Authentication:**
-• `/authorize` - Try OAuth flow
-• `/authorize username password` - Direct login
+**Get Started:**
+1. `/authorize username password` - Login to your Seedr account
+2. Send me any magnet link to start downloading
+3. Use `/list` to see your files
 
 **Commands:**
-• `/list` - List your files
+• `/list` - Show your files and folders
 • `/getlink <file_id>` - Get download link
 • `/delete <file_id>` - Delete a file
 
-**Adding Torrents:**
-Just send me a magnet link after authentication!
-
 **Example:**
-`/authorize myusername mypassword`
+`/authorize john.doe mypassword123`
+
+Then send any magnet link like:
+`magnet:?xt=urn:btih:...`
+
+🔒 **Privacy:** Your credentials are only used for authentication and are never stored.
     """
     await update.message.reply_text(welcome_text.strip())
 
 async def authorize(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start authentication process"""
+    """Authenticate with Seedr using username and password"""
     user_id = update.effective_user.id
     
-    # Check if user provided credentials in the command
-    if context.args and len(context.args) >= 2:
-        username = context.args[0]
-        password = " ".join(context.args[1:])  # In case password has spaces
-        
-        try:
-            seedr = SeedrAPI()
-            token = seedr.login_with_credentials(username, password)
-            
-            user_sessions[user_id] = {
-                "seedr": seedr,
-                "authorized": True
-            }
-            
-            await update.message.reply_text("✅ Login successful! You can now use the bot.")
-            return
-            
-        except Exception as e:
-            await update.message.reply_text(f"❌ Login failed: {str(e)}")
-            return
+    # Check if user provided credentials
+    if not context.args or len(context.args) < 2:
+        help_message = """
+❌ **Please provide your Seedr credentials:**
+
+Usage: `/authorize username password`
+
+Example: `/authorize myusername mypassword`
+
+⚠️ **Security:** Your credentials are only used for authentication and are not stored.
+        """
+        await update.message.reply_text(help_message.strip())
+        return
     
-    # If no credentials provided, try OAuth flow
+    username = context.args[0]
+    password = " ".join(context.args[1:])  # In case password has spaces
+    
+    # Send "logging in" message
+    login_msg = await update.message.reply_text("🔄 Logging in to Seedr...")
+    
     try:
         seedr = SeedrAPI()
+        token = seedr.login_with_credentials(username, password)
         
-        # Try OAuth device flow
+        user_sessions[user_id] = {
+            "seedr": seedr,
+            "authorized": True,
+            "username": username  # Store for reference
+        }
+        
+        await login_msg.edit_text("✅ Login successful! You can now use the bot.")
+        
+        # Test the connection by getting account info
         try:
-            device_info = seedr.get_device_code()
-            device_code = device_info.get("device_code")
-            user_code = device_info.get("user_code")
-            verification_uri = device_info.get("verification_uri")
-            interval = device_info.get("interval", 5)
-            
-            user_sessions[user_id] = {
-                "seedr": seedr,
-                "device_code": device_code,
-                "interval": interval,
-                "authorized": False
-            }
-            
-            auth_message = f"""
-🔐 **OAuth Authorization**
-
-1. Visit: {verification_uri}
-2. Enter code: `{user_code}`
-3. Click "Authorize"
-
-I'll automatically detect when you're done!
-            """
-            
-            await update.message.reply_text(auth_message)
-            
-            # Start polling for token
-            token = seedr.poll_for_token(device_code, interval)
-            user_sessions[user_id]["authorized"] = True
-            await update.message.reply_text("✅ Authorization successful!")
-            
-        except Exception as oauth_error:
-            # OAuth failed, provide alternative
-            alt_message = f"""
-❌ OAuth flow failed: {str(oauth_error)}
-
-**Alternative: Use username/password**
-Send: `/authorize your_username your_password`
-
-⚠️ **Security Note:** Your credentials are not stored and are only used for authentication.
-            """
-            await update.message.reply_text(alt_message)
-            
+            contents = seedr.list_contents()
+            file_count = len(contents.get("files", []))
+            folder_count = len(contents.get("folders", []))
+            await update.message.reply_text(
+                f"📊 **Account Status:**\n"
+                f"Files: {file_count}\n"
+                f"Folders: {folder_count}\n\n"
+                f"Ready to use! Send me a magnet link or use /list to see your files."
+            )
+        except:
+            # Connection test failed, but login might still work
+            pass
+        
     except Exception as e:
-        await update.message.reply_text(f"❌ Error during authorization: {str(e)}")
+        error_msg = str(e)
+        if "404" in error_msg:
+            error_msg = "Invalid credentials or Seedr API endpoint changed"
+        elif "403" in error_msg:
+            error_msg = "Access denied - check your username and password"
+        elif "timeout" in error_msg.lower():
+            error_msg = "Connection timeout - please try again"
+        
+        await login_msg.edit_text(f"❌ Login failed: {error_msg}")
+        
+        # Provide troubleshooting help
+        help_text = """
+🔧 **Troubleshooting:**
+• Double-check your username and password
+• Make sure your Seedr account is active
+• Try again in a few minutes if server is busy
+• Contact @yourbotusername if problems persist
+        """
+        await update.message.reply_text(help_text.strip())
 
 async def add_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add magnet link to Seedr"""
