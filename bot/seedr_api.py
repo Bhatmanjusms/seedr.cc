@@ -6,24 +6,23 @@ class SeedrAPI:
         self.session = requests.Session()
         self.access_token = None
         self.client_id = client_id
-        self.client_secret = client_secret  # Add if Seedr requires it
+        self.client_secret = client_secret  # Include if required
 
     def get_device_code(self):
-        # Updated OAuth device code endpoint
-        response = self.session.post(
+        # Changed to GET with query parameters
+        response = self.session.get(
             "https://www.seedr.cc/oauth/device/code",
-            data={
+            params={
                 "client_id": self.client_id,
-                # Include "client_secret" here if required by Seedr
+                # Add "scope" or other parameters if required by Seedr
             }
         )
         if response.ok:
             return response.json()
         else:
-            raise Exception(f"Device code error: {response.status_code} - {response.text}")
+            raise Exception(f"Device code error (GET): {response.status_code} - {response.text}")
 
     def poll_for_token(self, device_code, interval, timeout=1800):
-        # Updated OAuth token endpoint
         token_url = "https://www.seedr.cc/oauth/token"
         elapsed = 0
 
@@ -34,7 +33,6 @@ class SeedrAPI:
                     "device_code": device_code,
                     "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
                 }
-                # Add client_secret if required
                 if self.client_secret:
                     data["client_secret"] = self.client_secret
 
