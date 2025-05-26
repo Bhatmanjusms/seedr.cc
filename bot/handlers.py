@@ -1,111 +1,102 @@
+import os
+from seedrcc import Login, Seedr
 from telegram import Update
-from telegram.ext import ContextTypes
-from .seedr_api import SeedrAPI
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes
+)
 
-# Dictionary to store user sessions
-user_sessions = {}
+TOKEN_FILE = "seedr_token.txt"
+
+class SeedrBot:
+    def __init__(self):
+        self.pending_auth = {}  # user_id: (Login instance, device_code)
+        self.seedr = None
+        self.load_token()
+
+    def load_token(self):
+        if os.path.exists(TOKEN_FILE):
+            with open(TOKEN_FILE, "r") as f:
+                token = f.read().strip()
+            self.seedr = Seedr(token=token, callback=self.token_callback)
+            print("Loaded Seedr token and initialized Seedr client.")
+
+    def save_token(self, token):
+        with open(TOKEN_FILE, "w") as f:
+            f.write(token)
+        print("Saved Seedr token.")
+
+    def token_callback(self, updated_token):
+        self.save_token(updated_token)
+        print("Token refreshed and saved.")
+
+    async def start_auth(self, user_id):
+        login = Login()
+        device_code_data = login.getDeviceCode()
+        self.pending_auth[user_id] = (login, device_code_data['device_code'])
+        return device_code_data
+
+    async def complete_auth(self, user_id):
+        if user_id not in self.pending_auth:
+            return False, "No pending authorization. Use /auth first."
+        login, device_code = self.pending_auth[user_id]
+        try:
+            login.authorize(device_code)
+            token = login.token
+            self.seedr = Seedr(token=token, callback=self.token_callback)
+            self.save_token(token)
+            del self.pending_auth[user_id]
+            return True, "Device authorized! You can now use Seedr commands."
+        except Exception as e:
+            return False, f"Authorization failed: {e}"
+
+bot = SeedrBot()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    seedr = SeedrAPI()
-    device_data = seedr.get_device_code()
-    user_sessions[user_id] = {
-        "seedr": seedr,
-        "device_code": device_data["device_code"],
-        "interval": device_data.get("interval", 5)
-    }
     await update.message.reply_text(
-        f"Please visit {device_data['verification_url']} and enter the code: {device_data['user_code']}\n"
-        "After authorizing, send /authorize to complete the process."
+        "Welcome to the Seedr Bot!\n"
+        "Use /auth to link your Seedr.cc account."
     )
 
-async def auth_command(update, context):
+async def auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    auth_data = await bot.start_device_auth(user_id)
-    if auth_data:
-        message = f"""
-🔐 **Device Authorization Required**
+    data = await bot.start_auth(user_id)
+    msg = (
+        "🔑 *Seedr Device Authorization*\n\n"
+        "1. Visit: https://seedr.cc/devices\n"
+        f"2. Enter this code: `{data['user_code']}`\n"
+        "3. Click Authorize.\n"
+        "4. Return here and send /complete_auth"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-1. Go to: {auth_data['verification_url']}
-2. Enter this code: `{auth_data['user_code']}`
-3. Click "Authorize Device"
-4. Send /complete_auth when done
-        """
-        await update.message.reply_text(message, parse_mode='Markdown')
-    else:
-        await update.message.reply_text("❌ Failed to generate authorization code. Please try again.")
-
-async def complete_auth_command(update, context):
+async def complete_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    success = await bot.complete_auth(user_id)
-    if success:
-        await update.message.reply_text("✅ Device authorized successfully! You can now use Seedr features.")
-    else:
-        await update.message.reply_text("❌ Authorization failed. Make sure you completed the steps on the website.")
-
-
-async def add_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or not session["seedr"].access_token:
-        await update.message.reply_text("Please authorize first using /start and /authorize.")
-        return
-    magnet_link = update.message.text.strip()
-    if not magnet_link.startswith("magnet:"):
-        await update.message.reply_text("Please send a valid magnet link.")
-        return
-    response = session["seedr"].add_torrent(magnet_link)
-    if "error" in response:
-        await update.message.reply_text(f"Error: {response['error']}")
-    else:
-        await update.message.reply_text("Magnet link added successfully.")
-
-async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or not session["seedr"].access_token:
-        await update.message.reply_text("Please authorize first using /start and /authorize.")
-        return
-    contents = session["seedr"].list_contents()
-    message = "Files:\n"
-    for file in contents.get("files", []):
-        message += f"{file['id']}: {file['name']} ({file['size'] // (1024 * 1024)} MB)\n"
-    for folder in contents.get("folders", []):
-        message += f"{folder['id']}: {folder['name']} (Folder)\n"
+    success, message = await bot.complete_auth(user_id)
     await update.message.reply_text(message)
 
-async def get_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or not session["seedr"].access_token:
-        await update.message.reply_text("Please authorize first using /start and /authorize.")
+async def my_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not bot.seedr:
+        await update.message.reply_text("Please authorize first using /auth.")
         return
-    args = context.args
-    if not args:
-        await update.message.reply_text("Please provide the item ID. Usage: /getlink <item_id>")
-        return
-    item_id = args[0]
-    link = session["seedr"].get_download_link(item_id)
-    if link:
-        await update.message.reply_text(f"Download link: {link}")
-    else:
-        await update.message.reply_text("Item not found.")
+    try:
+        files = bot.seedr.listContents()
+        if not files['folders'] and not files['files']:
+            await update.message.reply_text("Your Seedr is empty.")
+            return
+        msg = "📂 *Your Seedr Files:*\n"
+        for folder in files['folders']:
+            msg += f"📁 {folder['name']}\n"
+        for file in files['files']:
+            msg += f"📄 {file['name']} ({file['size'] // 1024} KB)\n"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Failed to fetch files: {e}")
 
-async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or not session["seedr"].access_token:
-        await update.message.reply_text("Please authorize first using /start and /authorize.")
-        return
-    args = context.args
-    if not args:
-        await update.message.reply_text("Please provide the item ID. Usage: /delete <item_id>")
-        return
-    item_id = args[0]
-    response = session["seedr"].delete_item(item_id)
-    if "error" in response:
-        await update.message.reply_text(f"Error: {response['error']}")
-    else:
-        await update.message.reply_text("Item deleted successfully.")
+if __name__ == "__main__":
+    app = ApplicationBuilder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("auth", auth))
+    app.add_handler(CommandHandler("complete_auth", complete_auth))
+    app.add_handler(CommandHandler("myfiles", my_files))
+    print("Bot is running. Press Ctrl+C to stop.")
+    app.run_polling()
