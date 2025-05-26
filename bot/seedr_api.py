@@ -9,72 +9,160 @@ class SeedrAPI:
         self.client_secret = client_secret
 
     def login_with_credentials(self, username, password):
-        """Login using username and password via session-based auth"""
+        """Enhanced login with CSRF protection and proper session handling"""
         try:
-            # First, get the login page to extract any CSRF tokens if needed
-            login_page = self.session.get("https://www.seedr.cc/login")
+            # Step 1: Get the login page to extract CSRF token and set session cookies
+            print("Getting login page...")
+            login_page = self.session.get(
+                "https://www.seedr.cc/login",
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                }
+            )
             
-            # Attempt login with form data
+            csrf_token = None
+            # Try to extract CSRF token from various possible sources
+            if 'csrf' in login_page.text.lower():
+                import re
+                # Look for CSRF token in meta tags or hidden inputs
+                csrf_patterns = [
+                    r'<meta name="csrf-token" content="([^"]+)"',
+                    r'<input[^>]*name="[^"]*csrf[^"]*"[^>]*value="([^"]+)"',
+                    r'"csrf_token":"([^"]+)"',
+                    r'csrf["\s]*:["\s]*["\']([^"\']+)["\']'
+                ]
+                
+                for pattern in csrf_patterns:
+                    match = re.search(pattern, login_page.text, re.IGNORECASE)
+                    if match:
+                        csrf_token = match.group(1)
+                        print(f"Found CSRF token: {csrf_token[:10]}...")
+                        break
+            
+            # Step 2: Prepare login data
             login_data = {
                 "username": username,
                 "password": password
             }
             
-            # Try the login endpoint
-            response = self.session.post(
+            # Add CSRF token if found
+            if csrf_token:
+                login_data["_token"] = csrf_token
+                login_data["csrf_token"] = csrf_token
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": "https://www.seedr.cc/login",
+                "Origin": "https://www.seedr.cc"
+            }
+            
+            # Step 3: Try multiple login endpoints
+            login_endpoints = [
                 "https://www.seedr.cc/auth/login",
-                data=login_data,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
-            )
+                "https://www.seedr.cc/api/login", 
+                "https://www.seedr.cc/login",
+                "https://www.seedr.cc/api/auth/login"
+            ]
             
-            # Check if login was successful by trying to access a protected endpoint
-            test_response = self.session.get("https://www.seedr.cc/api/folder")
-            
-            if test_response.status_code == 200:
-                # Session-based authentication successful
-                self.access_token = "session_auth"  # Placeholder since we're using cookies
-                return self.access_token
-            else:
-                raise Exception(f"Login verification failed: {test_response.status_code}")
+            for endpoint in login_endpoints:
+                print(f"Trying login endpoint: {endpoint}")
                 
+                response = self.session.post(endpoint, data=login_data, headers=headers)
+                print(f"Login response status: {response.status_code}")
+                
+                # Check for successful login indicators
+                if response.status_code in [200, 302]:
+                    # Test if we can access protected content
+                    test_response = self.session.get(
+                        "https://www.seedr.cc/api/folder",
+                        headers={"User-Agent": headers["User-Agent"]}
+                    )
+                    
+                    print(f"API test response: {test_response.status_code}")
+                    
+                    if test_response.status_code == 200:
+                        self.access_token = "session_auth"
+                        print("Login successful!")
+                        return self.access_token
+                    elif test_response.status_code == 401:
+                        print("API still returns 401, trying next endpoint...")
+                        continue
+                    else:
+                        print(f"Unexpected API response: {test_response.status_code}")
+                        # Try to parse response for more info
+                        try:
+                            api_data = test_response.json()
+                            if "error" in api_data:
+                                print(f"API Error: {api_data['error']}")
+                        except:
+                            pass
+                
+                # Check if login response contains error messages
+                try:
+                    if response.headers.get('content-type', '').startswith('application/json'):
+                        resp_data = response.json()
+                        if 'error' in resp_data:
+                            print(f"Login error: {resp_data['error']}")
+                        elif 'message' in resp_data:
+                            print(f"Login message: {resp_data['message']}")
+                except:
+                    pass
+            
+            # Step 4: If direct login fails, try checking if we need email instead of username
+            if "@" not in username:
+                print("Trying with email format...")
+                email_variants = [f"{username}@gmail.com", f"{username}@yahoo.com", f"{username}@hotmail.com"]
+                
+                for email in email_variants:
+                    login_data_email = login_data.copy()
+                    login_data_email["username"] = email
+                    login_data_email["email"] = email
+                    
+                    for endpoint in login_endpoints:
+                        response = self.session.post(endpoint, data=login_data_email, headers=headers)
+                        if response.status_code in [200, 302]:
+                            test_response = self.session.get("https://www.seedr.cc/api/folder")
+                            if test_response.status_code == 200:
+                                self.access_token = "session_auth"
+                                return self.access_token
+            
+            raise Exception("All login attempts failed - check credentials or account status")
+            
         except Exception as e:
-            # Try alternative login method
-            try:
-                return self._try_api_key_login(username, password)
-            except:
-                raise Exception(f"All login methods failed: {str(e)}")
+            raise Exception(f"Login process failed: {str(e)}")
 
     def _try_api_key_login(self, username, password):
-        """Try logging in and extracting API key from response"""
+        """Alternative API-based login"""
         try:
-            # Some services provide API keys after login
-            login_response = self.session.post(
-                "https://www.seedr.cc/api/login",
-                json={
-                    "username": username,
-                    "password": password
-                },
-                headers={
-                    "Content-Type": "application/json"
-                }
-            )
+            # Some services have separate API login endpoints
+            api_endpoints = [
+                "https://www.seedr.cc/api/v1/auth/login",
+                "https://www.seedr.cc/api/v2/auth/login",
+                "https://www.seedr.cc/rest/login"
+            ]
             
-            if login_response.status_code == 200:
-                data = login_response.json()
-                if "token" in data:
-                    self.access_token = data["token"]
-                    return self.access_token
-                elif "api_key" in data:
-                    self.access_token = data["api_key"]
-                    return self.access_token
+            for endpoint in api_endpoints:
+                try:
+                    response = self.session.post(
+                        endpoint,
+                        json={"username": username, "password": password},
+                        headers={"Content-Type": "application/json"}
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        for key in ["token", "access_token", "api_key", "auth_token"]:
+                            if key in data:
+                                self.access_token = data[key]
+                                return self.access_token
+                except:
+                    continue
             
-            raise Exception(f"API key login failed: {login_response.status_code}")
+            raise Exception("No API key found in responses")
             
         except Exception as e:
-            raise Exception(f"API key extraction failed: {str(e)}")
+            raise Exception(f"API key login failed: {str(e)}")
 
     def get_device_code(self):
         """OAuth device code flow - may not be available"""
