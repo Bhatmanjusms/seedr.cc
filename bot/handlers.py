@@ -5,6 +5,20 @@ from .seedr_api import SeedrAPI
 # Dictionary to store user sessions
 user_sessions = {}
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    seedr = SeedrAPI()
+    device_data = seedr.get_device_code()
+    user_sessions[user_id] = {
+        "seedr": seedr,
+        "device_code": device_data["device_code"],
+        "interval": device_data.get("interval", 5)
+    }
+    await update.message.reply_text(
+        f"Please visit {device_data['verification_url']} and enter the code: {device_data['user_code']}\n"
+        "After authorizing, send /authorize to complete the process."
+    )
+
 async def auth_command(update, context):
     user_id = update.effective_user.id
     
