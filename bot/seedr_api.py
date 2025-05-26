@@ -7,7 +7,9 @@ class SeedrAPI:
         self.access_token = None
 
     def get_device_code(self):
-        response = self.session.post("https://www.seedr.cc/api/device/code?client_id=seedr_xbmc")
+        response = self.session.post("https://www.seedr.cc/api/device/code", data={
+            "client_id": "seedr_xbmc"
+        })
         if response.ok:
             return response.json()
         else:
