@@ -5,31 +5,32 @@ from .seedr_api import SeedrAPI
 # Dictionary to store user sessions
 user_sessions = {}
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def auth_command(update, context):
     user_id = update.effective_user.id
-    seedr = SeedrAPI()
-    device_data = seedr.get_device_code()
-    user_sessions[user_id] = {
-        "seedr": seedr,
-        "device_code": device_data["device_code"],
-        "interval": device_data.get("interval", 5)
-    }
-    await update.message.reply_text(
-        f"Please visit {device_data['verification_url']} and enter the code: {device_data['user_code']}\n"
-        "After authorizing, send /authorize to complete the process."
-    )
+    
+    auth_data = await bot.start_device_auth(user_id)
+    if auth_data:
+        message = f"""
+🔐 **Device Authorization Required**
 
-async def authorize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+1. Go to: {auth_data['verification_url']}
+2. Enter this code: `{auth_data['user_code']}`
+3. Click "Authorize Device"
+4. Send /complete_auth when done
+        """
+        await update.message.reply_text(message, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Failed to generate authorization code. Please try again.")
+
+async def complete_auth_command(update, context):
     user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session:
-        await update.message.reply_text("Please start the authorization process with /start.")
-        return
-    try:
-        access_token = session["seedr"].poll_for_token(session["device_code"], session["interval"])
-        await update.message.reply_text("Authorization successful! You can now use the bot.")
-    except Exception as e:
-        await update.message.reply_text(str(e))
+    
+    success = await bot.complete_auth(user_id)
+    if success:
+        await update.message.reply_text("✅ Device authorized successfully! You can now use Seedr features.")
+    else:
+        await update.message.reply_text("❌ Authorization failed. Make sure you completed the steps on the website.")
+
 
 async def add_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
