@@ -8,101 +8,98 @@ class SeedrAPI:
         self.client_id = client_id
         self.client_secret = client_secret
 
-    def get_device_code(self):
-        """Get device code using POST method"""
-        try:
-            data = {
-                "client_id": self.client_id,
-                "response_type": "device_code"
-            }
-            if self.client_secret:
-                data["client_secret"] = self.client_secret
-            
-            response = self.session.post(
-                "https://www.seedr.cc/oauth/device/code",
-                data=data
-            )
-            
-            if response.ok:
-                return response.json()
-            else:
-                raise Exception(f"Device code error: {response.status_code} - {response.text}")
-                
-        except Exception as e:
-            # If device code endpoint fails, try alternative approach
-            raise Exception(f"Device code request failed: {str(e)}")
-
-    def poll_for_token(self, device_code, interval, timeout=1800):
-        """Poll for access token"""
-        token_url = "https://www.seedr.cc/oauth/token"
-        elapsed = 0
-
-        while elapsed < timeout:
-            try:
-                data = {
-                    "client_id": self.client_id,
-                    "device_code": device_code,
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
-                }
-                if self.client_secret:
-                    data["client_secret"] = self.client_secret
-
-                response = self.session.post(token_url, data=data)
-                
-                if response.status_code == 200:
-                    response_data = response.json()
-                    self.access_token = response_data.get("access_token")
-                    return self.access_token
-                elif response.status_code == 400:
-                    response_data = response.json()
-                    error = response_data.get("error")
-                    if error in ["authorization_pending", "slow_down"]:
-                        time.sleep(interval)
-                        elapsed += interval
-                    else:
-                        raise Exception(f"Auth error: {error}")
-                else:
-                    raise Exception(f"Token request failed: {response.status_code}")
-                    
-            except requests.exceptions.RequestException as e:
-                raise Exception(f"Network error during token poll: {str(e)}")
-
-        raise Exception("Authorization timeout")
-
-    # Alternative authentication method using username/password
     def login_with_credentials(self, username, password):
-        """Alternative login method using username/password"""
+        """Login using username and password via session-based auth"""
         try:
+            # First, get the login page to extract any CSRF tokens if needed
+            login_page = self.session.get("https://www.seedr.cc/login")
+            
+            # Attempt login with form data
             login_data = {
                 "username": username,
-                "password": password,
-                "grant_type": "password",
-                "client_id": self.client_id
+                "password": password
             }
             
+            # Try the login endpoint
             response = self.session.post(
-                "https://www.seedr.cc/oauth/token",
-                data=login_data
+                "https://www.seedr.cc/auth/login",
+                data=login_data,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
             )
             
-            if response.status_code == 200:
-                token_data = response.json()
-                self.access_token = token_data.get("access_token")
+            # Check if login was successful by trying to access a protected endpoint
+            test_response = self.session.get("https://www.seedr.cc/api/folder")
+            
+            if test_response.status_code == 200:
+                # Session-based authentication successful
+                self.access_token = "session_auth"  # Placeholder since we're using cookies
                 return self.access_token
             else:
-                raise Exception(f"Login failed: {response.status_code} - {response.text}")
+                raise Exception(f"Login verification failed: {test_response.status_code}")
                 
         except Exception as e:
-            raise Exception(f"Credential login failed: {str(e)}")
+            # Try alternative login method
+            try:
+                return self._try_api_key_login(username, password)
+            except:
+                raise Exception(f"All login methods failed: {str(e)}")
+
+    def _try_api_key_login(self, username, password):
+        """Try logging in and extracting API key from response"""
+        try:
+            # Some services provide API keys after login
+            login_response = self.session.post(
+                "https://www.seedr.cc/api/login",
+                json={
+                    "username": username,
+                    "password": password
+                },
+                headers={
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            if login_response.status_code == 200:
+                data = login_response.json()
+                if "token" in data:
+                    self.access_token = data["token"]
+                    return self.access_token
+                elif "api_key" in data:
+                    self.access_token = data["api_key"]
+                    return self.access_token
+            
+            raise Exception(f"API key login failed: {login_response.status_code}")
+            
+        except Exception as e:
+            raise Exception(f"API key extraction failed: {str(e)}")
+
+    def get_device_code(self):
+        """OAuth device code flow - may not be available"""
+        raise Exception("OAuth device flow not available. Please use username/password authentication.")
+
+    def poll_for_token(self, device_code, interval, timeout=1800):
+        """OAuth token polling - not implemented"""
+        raise Exception("OAuth not available. Please use username/password authentication.")
 
     # ========== API Methods (with proper headers) ==========
     def _auth_headers(self):
+        """Get authentication headers"""
         if not self.access_token:
             raise Exception("Not authenticated")
-        return {
-            "Authorization": f"Bearer {self.access_token}",
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Content-Type": "application/x-www-form-urlencoded"
         }
+        
+        # If we have a real token (not session_auth), add Authorization header
+        if self.access_token != "session_auth":
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        
+        return headers
 
     def add_torrent(self, magnet_link):
         """Add torrent via magnet link"""
